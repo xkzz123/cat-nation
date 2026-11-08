@@ -2,6 +2,13 @@
   "name": "cat-nation-local",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node server.mjs", "test": "node --test tests/*.test.mjs", "test:game": "node game/node_modules/jest/bin/jest.js --config game/jest.config.unittest.json --runInBand" },
-  "engines": { "node": ">=20" }
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:game": "node game/node_modules/jest/bin/jest.js --config game/jest.config.unittest.json --runInBand",
+    "launch": "node launcher.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }

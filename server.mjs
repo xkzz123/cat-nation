@@ -8,6 +8,35 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const limit = 20 * 1024 * 1024;
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.gif': 'image/gif', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2' };
 
+export function getPort(value = process.env.CAT_NATION_PORT) {
+  if (value === undefined) return 8765;
+  if (!/^\d+$/.test(String(value)) || !Number.isInteger(Number(value)) || Number(value) < 1 || Number(value) > 65535) {
+    throw new Error('CAT_NATION_PORT 必须是 1–65535 的整数。');
+  }
+  return Number(value);
+}
+
+export function getHost(value = process.env.CAT_NATION_HOST) {
+  const host = value ?? '127.0.0.1';
+  if (!host || /[\s/\\?#@]/.test(host)) throw new Error('CAT_NATION_HOST 必须是监听地址，不包含协议或路径。');
+  return host;
+}
+
+export function getBaseUrl(value = process.env.CAT_NATION_BASE_URL) {
+  if (value === undefined) return undefined;
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
+      url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('CAT_NATION_BASE_URL 必须是 HTTP(S) 根地址，不包含凭据、路径、查询或片段。');
+  }
+  return url.origin + '/';
+}
+
+export function localUrl(host, port) {
+  const address = host === '0.0.0.0' ? '127.0.0.1' : host === '::' ? '::1' : host;
+  return `http://${address.includes(':') ? '[' + address + ']' : address}:${port}/`;
+}
+
 function validate(save) {
   if (!save || typeof save !== 'object' || !Array.isArray(save.resources) || !save.calendar || !save.game || !save.buildings) {
     throw Object.assign(new Error('不是有效的猫国存档，请选择原版导出的存档。'), { status: 400 });
@@ -25,7 +54,8 @@ function atomicWrite(file, value) {
   fs.renameSync(temporary, file);
 }
 
-export function createGameServer({ dataDir = path.join(root, 'data'), gameDir = path.join(root, 'game') } = {}) {
+export function createGameServer({ dataDir = path.join(root, 'data'), gameDir = path.join(root, 'game'), baseUrl = getBaseUrl() } = {}) {
+  const publicOrigin = baseUrl === undefined ? undefined : new URL(getBaseUrl(baseUrl)).origin;
   fs.mkdirSync(path.join(dataDir, 'backups'), { recursive: true });
   const latest = path.join(dataDir, 'latest.json');
   const snapshotDir = path.join(dataDir, 'backups');
@@ -64,9 +94,10 @@ export function createGameServer({ dataDir = path.join(root, 'data'), gameDir = 
     const json = (status, value) => { res.writeHead(status, { 'Content-Type': mime['.json'], 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
     try {
       const port = server.address().port;
-      const origin = `http://127.0.0.1:${port}`;
-      if (req.headers.host !== `127.0.0.1:${port}`) return json(403, { error: '请使用 127.0.0.1 本地地址。' });
-      if (req.headers.origin && req.headers.origin !== origin) return json(403, { error: '请求来源不匹配。' });
+      const origin = new URL(localUrl(server.address().address, port)).origin;
+      const origins = [origin, publicOrigin].filter(Boolean);
+      if (!origins.some(value => new URL(value).host === req.headers.host)) return json(403, { error: '请求 Host 不匹配配置地址。' });
+      if (req.headers.origin && !origins.includes(req.headers.origin)) return json(403, { error: '请求来源不匹配。' });
       res.setHeader('Content-Security-Policy', "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'self'; form-action 'self'");
       res.setHeader('X-Content-Type-Options', 'nosniff');
       const url = new URL(req.url, origin);
@@ -114,7 +145,10 @@ export function createGameServer({ dataDir = path.join(root, 'data'), gameDir = 
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const server = createGameServer();
-  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? '端口 8765 已被使用。若游戏已启动，请打开 http://127.0.0.1:8765/' : error); process.exitCode = 1; });
-  server.listen(8765, '127.0.0.1', () => console.log('猫国建设者本地版：http://127.0.0.1:8765/\n存档目录：' + path.join(root, 'data') + '\n关闭此窗口会停止服务。'));
+  const port = getPort();
+  const host = getHost();
+  const baseUrl = getBaseUrl();
+  const server = createGameServer({ baseUrl });
+  server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `端口 ${port} 已被使用。若游戏已启动，请打开 ${baseUrl ?? localUrl(host, port)}` : error); process.exitCode = 1; });
+  server.listen(port, host, () => console.log(`猫国建设者本地版：${baseUrl ?? localUrl(host, port)}\n存档目录：` + path.join(root, 'data') + '\n关闭此窗口会停止服务。'));
 }

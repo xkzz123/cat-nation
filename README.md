@@ -29,10 +29,43 @@
 ## 开始游戏
 
 1. 双击本目录的 **start.cmd**，会自动打开浏览器。
-2. 保持启动窗口运行。游戏地址固定为 **http://127.0.0.1:8765/**。
+2. 保持启动窗口运行。游戏地址默认为 **http://127.0.0.1:8765/**。
 3. 玩完先点击顶部「保存并备份」，成功后可以关闭页面和启动窗口。
 
 只需本机 Node.js 20 或更新版本，本机已安装；不需要 npm install，不需要账号，也不需要联网。也可以在本目录运行 `npm start`，然后打开上述地址。
+
+macOS 和 Linux 可运行 `npm run launch`，自动启动服务并打开默认浏览器；Windows 仍可双击 `start.cmd`。浏览器启动失败时会打印访问地址，服务继续运行，可手动打开。
+
+默认端口被占用时，可通过 `CAT_NATION_PORT` 设置 1–65535 的端口，`npm start` 和 `npm run launch` 都会使用它。例如 macOS/Linux：
+
+```bash
+CAT_NATION_PORT=8766 npm run launch
+```
+
+Windows 命令提示符：
+
+```bat
+set CAT_NATION_PORT=8766
+node launcher.mjs
+```
+
+更换端口会改变浏览器存储所属地址；磁盘存档仍使用原来的 `data` 目录。
+
+### 监听地址和域名入口
+
+- `CAT_NATION_HOST`：监听地址，默认 `127.0.0.1`；需要局域网直连时可显式设为 `0.0.0.0`。
+- `CAT_NATION_PORT`：监听端口，默认 `8765`。
+- `CAT_NATION_BASE_URL`：浏览器访问的 HTTP(S) 根地址，例如 `https://cats.example/`。不配时使用本地监听地址；不支持子路径部署。
+
+反向代理与游戏在同一台机器时，保持回环监听即可，无需监听 `0.0.0.0`：
+
+```bash
+CAT_NATION_BASE_URL=https://cats.example/ npm run launch
+```
+
+DNS 和 HTTPS 由部署者配置，代理转发到本机游戏端口，并保留原始 Host。服务只接受本地地址及显式配置域名的 Host/Origin；不信任任意转发头。启动器始终通过本地地址探活，浏览器使用配置的域名入口。配置入口不会自动创建 DNS、证书或隧道。
+
+本版本没有账号鉴权，所有访问者共用同一份磁盘存档；域名入口应置于有访问认证的反向代理之后，不应直接公开存档读写接口。
 
 ## 存档与备份
 
