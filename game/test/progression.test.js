@@ -124,6 +124,7 @@ test('reentry compares only known save baselines and ignores unsupported metadat
   expect(Flow.metadata().version).toBe(1);
   expect(Flow.metadata({version:1,baseline:{at:1,population:0,resources:'bad'},pendingRunSummary:{id:'bad'}}).baseline).toBe(null);
   expect(Flow.metadata({version:1,pendingRunSummary:{id:'bad'}}).pendingRunSummary).toBe(null);
+  expect(Flow.reentry(game,{at:0,population:0,resources:[null,{name:'wood',value:'invalid'}]},'磁盘存档',2000).changes.every(r=>r.value===null)).toBe(true);
 });
 
 test('first winter and recovery use the live engine calendar and seasonal production, and the resulting save resumes without replaying opening actions', () => {

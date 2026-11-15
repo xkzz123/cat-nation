@@ -10,7 +10,7 @@
   function baseline(game,now){return {at:now,year:game.calendar.year,population:game.village.getKittens(),resources:['catnip','wood','science'].map(function(id){return {name:id,value:game.resPool.get(id).value};})};}
   function reentry(game,previous,source,now){
     var current=baseline(game,now),valid=previous&&now>=previous.at;
-    return {source:source,elapsed:valid?now-previous.at:null,year:current.year,population:current.population,populationChange:valid&&Number.isFinite(previous.population)?current.population-previous.population:null,changes:valid?current.resources.map(function(r){var old=(previous.resources||[]).find(function(p){return p.name===r.name&&Number.isFinite(p.value);});return {name:r.name,value:old?r.value-old.value:null};}):[]};
+    return {source:source,elapsed:valid?now-previous.at:null,year:current.year,population:current.population,populationChange:valid&&Number.isFinite(previous.population)?current.population-previous.population:null,changes:valid?current.resources.map(function(r){var old=(Array.isArray(previous.resources)?previous.resources:[]).find(function(p){return p&&p.name===r.name&&Number.isFinite(p.value);});return {name:r.name,value:old?r.value-old.value:null};}):[]};
   }
   function risk(game){
     var food=game.resPool.get('catnip'),rate=game.getResourcePerTick('catnip',true)*game.getTicksPerSecondUI();

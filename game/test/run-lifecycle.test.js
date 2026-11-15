@@ -5,14 +5,15 @@ const Bridge = require('../map/bridge');
 const source = fs.readFileSync(require.resolve('../local-client.js'), 'utf8');
 const clone = value => JSON.parse(JSON.stringify(value));
 
-async function session(saved) {
+async function session(saved, {speed=1,deferEntry=false}={}) {
   global.gamePage = global.game = new com.nuclearunicorn.game.ui.GamePage();
   game.setUI(new classes.ui.UISystem('gameContainerId'));
   game.resetState();
   LCstorage.removeItem('com.nuclearunicorn.kittengame.savedata');
   if (saved) { LCstorage.setItem('com.nuclearunicorn.kittengame.savedata', JSON.stringify(saved)); game.load(); }
   const current = game;
-  new Bridge(current, {classes, com, CatProgression:Flow});
+  const engine={classes, com, CatProgression:Flow};
+  new Bridge(current, engine);
   let disk = {revision:saved?'loaded':null,save:saved||null}, index=0, failure='', confirm;
   const writes=[], reload=jest.fn(), reset=jest.spyOn(current, '_resetInternal');
   current.ui.confirm = (title, message, yes, no) => { confirm={message,yes,no}; };
@@ -27,6 +28,7 @@ async function session(saved) {
       const body=JSON.parse(options.body);writes.push(body);
       if(failure==='backup'&&body.kind==='manual')throw new Error('backup failed');
       if(failure==='commit'&&body.kind==='reset')throw new Error('commit failed');
+      if(failure==='replace'&&body.kind==='import')throw new Error('import failed');
       if(body.revision!==disk.revision)return {ok:false,status:409,json:async()=>({error:'conflict'})};
       disk={revision:String(++index),save:clone(body.save),operationId:body.operationId,savedAt:new Date().toISOString()};
       if(failure==='response'&&body.kind==='reset')throw new Error('response lost');
@@ -35,8 +37,13 @@ async function session(saved) {
   };
   scope.window=scope;
   vm.runInNewContext(source,scope);
+  engine.localGame=scope.localGame;
   scope.localGame.attach(current);
-  await scope.localGame.save('manual');
+  scope.localGame.setGameSpeed(speed);
+  if (!deferEntry) {
+    if (!scope.localGame.getEntry()) current.tick();
+    await scope.localGame.save('manual');
+  }
   const settle=async()=>{for(let n=0;n<80;n++)await Promise.resolve();};
   return {game:current,api:scope.localGame,writes,reload,reset,settle,get disk(){return disk;},get confirm(){return confirm;},fail(value){failure=value;},conflict(){disk={...disk,revision:'other-window'};}};
 }
@@ -118,4 +125,70 @@ test('challenge activation also backs up before destructive challenge preparatio
   s.fail('');s.game.challenges.applyPending(false);await s.confirm.yes();await s.settle();
   expect(s.api.getResetState()).toBe('completed');
   expect(s.disk.save.challenges.challenges.find(c=>c.name==='winterIsComing').active).toBe(true);
+});
+
+test('a failed backup import cannot release the suspended state of an uncommitted reset', async () => {
+  const s=await session();s.fail('commit');
+  s.game.reset();await s.confirm.yes();await s.settle();
+  expect(s.api.getResetState()).toBe('failed-after-reset');
+  s.fail('replace');const callback=jest.fn();
+  s.game._loadSaveJson(JSON.stringify(s.disk.save),callback);await s.settle();
+  expect(callback).toHaveBeenCalledWith(expect.any(Error));
+  expect(s.api.canWrite()).toBe(false);
+  expect(s.game.isReadOnly()).toBe(true);
+  expect(s.game.isPaused).toBe(true);
+  s.fail('');await s.api.retryReset();
+  expect(s.reset).toHaveBeenCalledTimes(1);
+  expect(s.api.getResetState()).toBe('completed');
+});
+
+test('reentry waits for the first native offline calculation and does not multiply its gains by the page speed', async () => {
+  const initial=await session();
+  initial.game.bld.get('field').val=initial.game.bld.get('field').on=10;
+  initial.game.opts.enableRedshift=true;
+  initial.game.updateCaches();
+  const saved=clone(initial.game.save());
+  saved.time.timestamp=Date.now()-60000;
+  saved.progression.baseline.at=saved.time.timestamp;
+  const values=[];
+  for (const speed of [1,20]) {
+    const s=await session(clone(saved),{speed,deferEntry:true});
+    expect(s.api.getEntry()).toBeUndefined();
+    expect(s.api.canWrite()).toBe(false);
+    expect(s.writes).toHaveLength(0);
+    s.game.save();await expect(s.api.save()).rejects.toThrow();
+    expect(s.writes).toHaveLength(0);
+    const redshift=jest.spyOn(s.game.time,'applyRedshift');
+    s.game.tick();await s.settle();
+    expect(redshift).toHaveBeenCalledTimes(1);
+    const entry=s.api.getEntry();
+    expect(entry.elapsed).toBeGreaterThanOrEqual(60000);
+    expect(s.api.canWrite()).toBe(true);
+    values.push(entry.changes.find(r=>r.name==='catnip').value);
+    s.game.tick();await s.settle();
+    expect(redshift).toHaveBeenCalledTimes(1);
+  }
+  expect(values[0]).toBeGreaterThan(0);
+  expect(values[1]).toBeCloseTo(values[0]);
+});
+
+test('offline queue construction retains native write access only inside the synchronous engine settlement', async () => {
+  const initial=await session();
+  initial.game.opts.enableRedshift=true;
+  initial.game.bld.get('field').unlocked=true;
+  initial.game.resPool.get('catnip').value=1000;
+  initial.game.time.queue.addToQueue('field','buildings','field');
+  const saved=clone(initial.game.save());
+  initial.game.time.queue.queueItems=[];
+  saved.time.timestamp=Date.now()-60000;
+  const s=await session(saved,{deferEntry:true});
+  expect(s.api.canWrite()).toBe(false);
+  expect(s.game.bld.get('field').val).toBe(0);
+  expect(s.game.bld.get('field').on).toBe(0);
+  expect(s.game.time.queue.queueLength()).toBe(1);
+  s.game.tick();await s.settle();
+  expect(s.game.bld.get('field').val).toBe(1);
+  expect(s.game.time.queue.queueLength()).toBe(0);
+  expect(s.api.getEntry()).toBeDefined();
+  expect(s.api.canWrite()).toBe(true);
 });

@@ -12,6 +12,10 @@
 - **THEN** 展示与上次保存相比的关键变化和当前建议
 - **AND** 不重复结算离线进度，不以页面速度倍率放大离线收益
 
+#### Scenario: Offline processing is still pending
+- **WHEN** 已载入旧档但原版首次离线处理尚未执行
+- **THEN** 等待原版自然结算完成后再生成摘要并开放保存，不提前覆盖离线时间基线
+
 #### Scenario: Invalid clock or missing baseline
 - **WHEN** 会话基线缺失或本机时间早于记录时间
 - **THEN** 不展示虚构变化或负离线时长，仍可查看当前目标

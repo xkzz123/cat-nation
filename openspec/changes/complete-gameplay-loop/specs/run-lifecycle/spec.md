@@ -31,6 +31,11 @@
 - **WHEN** 转生结果已经落盘但客户端未收到响应
 - **THEN** 通过回读识别该结果并继续载入，不重复授予收益或重置
 
+#### Scenario: Recovery import also fails
+- **WHEN** 转生结果尚未提交且恢复备份的导入请求失败
+- **THEN** 保留原有暂停和写入保护，不恢复正常经营
+- **AND** 仍可重试同一转生结果或再次恢复备份
+
 ### Requirement: Next run continuation
 系统 SHALL 在成功转生后展示一次本轮回顾并基于新存档提供下一周目目标，区分转生与删档。
 

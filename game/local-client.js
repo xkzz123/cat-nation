@@ -4,7 +4,7 @@
   var revision = null, chain = Promise.resolve(), suspended = false, conflict = false, gameRef;
   var api = window.localGame = { ready: false };
   var progression = window.CatProgression, flow, entry, resetState = 'idle', resetCandidate, resetId, resetBefore, resetPrepared = false, resetBusy = false;
-  var loadedSave, loadedSource = '新游戏';
+  var loadedSave, loadedSource = '新游戏', entryPending = false, settlingEntry = false;
   var initialError = '';
   var intervalKey = 'cat-nation.local.autosave-seconds', saveInterval = 15, saveTimer;
   var saveIntervals = [{ seconds: 5, label: '5 秒' }, { seconds: 15, label: '15 秒' }, { seconds: 30, label: '30 秒' }, { seconds: 60, label: '1 分钟' }, { seconds: 120, label: '2 分钟' }, { seconds: 300, label: '5 分钟' }, { seconds: 600, label: '10 分钟' }];
@@ -129,12 +129,13 @@
 
   function serialize() {
     if (!gameRef || gameRef.currentSaveIsBroken || gameRef.previewMode) throw new Error('游戏尚未就绪或存档加载失败，已阻止保存。');
+    if (entryPending) throw new Error('正在结算原版离线进度，请稍候。');
     if (resetCandidate) return resetCandidate;
     var wasSuspended = suspended;
     suspended = true;
     try { return gameRef.save(); } finally { suspended = wasSuspended; }
   }
-  api.canWrite = function () { return api.ready && !suspended && !conflict && !!gameRef && !gameRef.currentSaveIsBroken && !gameRef.previewMode && !(gameRef.isReadOnly && gameRef.isReadOnly()); };
+  api.canWrite = function () { return api.ready && (!entryPending || settlingEntry) && !suspended && !conflict && !!gameRef && !gameRef.currentSaveIsBroken && !gameRef.previewMode && !(gameRef.isReadOnly && gameRef.isReadOnly()); };
   api.save = function (kind) { if (!api.canWrite()) return Promise.reject(new Error('当前进度不可写入，请先处理存档状态。')); return write(serialize(), kind || 'manual'); };
   api.getProgression = function () { return flow; };
   api.getEntry = function () { return entry; };
@@ -144,7 +145,7 @@
   function showClassicSummary() {
     var summary = flow && flow.pendingRunSummary, target = document.getElementById('local-run-summary');
     if (!target) return;
-    target.hidden = !summary || summary.read;
+    target.hidden = entryPending || !summary || summary.read;
     if (target.hidden) return;
     document.getElementById('local-run-detail').textContent = '上一轮第 ' + summary.year + ' 年，' + summary.population + ' 只猫咪，' + summary.buildings + ' 座建筑，' + summary.technologies + ' 项科技。实际结算：威望 ' + (summary.paragon >= 0 ? '+' : '') + summary.paragon + '；累计业力猫咪 ' + summary.karmaKittens + '。新周目已载入，可继续发展。';
     if (window.location && window.location.search && new URLSearchParams(window.location.search).get('view') === 'classic') {
@@ -172,11 +173,12 @@
 
   async function replace(save, kind) {
     if (resetBusy) throw new Error('转生正在提交，请等待结果。');
-    var wasPaused = gameRef.isPaused;
+    if (entryPending) throw new Error('正在结算原版离线进度，请稍候。');
+    var wasPaused = gameRef.isPaused, wasSuspended = suspended;
     suspended = true;
     gameRef.isPaused = true;
     try { await chain; await write(save, kind); location.reload(); }
-    catch (error) { status(error.message, true); suspended = false; gameRef.isPaused = conflict || wasPaused; throw error; }
+    catch (error) { status(error.message, true); suspended = wasSuspended; gameRef.isPaused = conflict || wasPaused; throw error; }
   }
 
   api.prepare = function () {
@@ -195,7 +197,23 @@
     if (progression) {
       if (!loadedSave && loadedSource === '浏览器存档' && game._parseLSSaveData) loadedSave = game._parseLSSaveData();
       flow = progression.metadata(loadedSave && loadedSave.progression);
-      entry = progression.reentry(game, flow.baseline, loadedSource, Date.now());
+      entryPending = !!(loadedSave && loadedSave.time && game.time && game.time.calculateRedshift);
+      if (entryPending) {
+        var calculateRedshift = game.time.calculateRedshift;
+        game.time.calculateRedshift = function () {
+          var wasSettling = settlingEntry, result;
+          settlingEntry = entryPending;
+          try { result = calculateRedshift.apply(this, arguments); }
+          finally { settlingEntry = wasSettling; }
+          if (entryPending) {
+            entryPending = false;
+            entry = progression.reentry(game, flow.baseline, loadedSource, Date.now());
+            showClassicSummary();
+            if (api.canWrite()) game.save();
+          }
+          return result;
+        };
+      } else entry = progression.reentry(game, flow.baseline, loadedSource, Date.now());
       var prepare = game._prepareSaveData;
       if (prepare) game._prepareSaveData = function (data) { data.progression = Object.assign({}, flow, { baseline: progression.baseline(game, Date.now()) }); return prepare.call(this, data); };
     }
@@ -206,7 +224,10 @@
       if (suspended || conflict || this.previewMode || this.currentSaveIsBroken) return;
       var steps = gameSpeed;
       for (var step = 0; step < steps; step++) {
-        originalTick.apply(this, arguments);
+        var wasSettling = settlingEntry;
+        settlingEntry = entryPending || wasSettling;
+        try { originalTick.apply(this, arguments); }
+        finally { settlingEntry = wasSettling; }
         if (this.isPaused || this.previewMode || this.currentSaveIsBroken || suspended || conflict) break;
       }
     };
@@ -215,6 +236,7 @@
     game.autosaveFrequency = game.ticksBeforeSave = Infinity;
     var originalSave = game.save;
     game.save = function () {
+      if (entryPending) return loadedSave;
       if (resetCandidate) return resetCandidate;
       var data = originalSave.apply(this, arguments);
       if (!suspended && !this.currentSaveIsBroken && !this.previewMode) write(data, 'auto').catch(function () {});
@@ -245,7 +267,7 @@
       finally { resetBusy = false; }
     };
     game.resetAutomatic = async function () {
-      if (resetBusy || resetCandidate || conflict || game.currentSaveIsBroken || game.previewMode) return;
+      if (entryPending || resetBusy || resetCandidate || conflict || game.currentSaveIsBroken || game.previewMode) return;
       resetBusy = true;
       var wasPaused = game.isPaused;
       suspended = true; game.isPaused = true;
@@ -320,7 +342,7 @@
         fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ save: save, revision: revision, kind: 'auto' }), keepalive: true }).catch(function () {});
       } catch (_) {}
     });
-    if (!game.currentSaveIsBroken) game.save();
+    if (!game.currentSaveIsBroken && !entryPending) game.save();
   };
 
   document.addEventListener('DOMContentLoaded', function () {

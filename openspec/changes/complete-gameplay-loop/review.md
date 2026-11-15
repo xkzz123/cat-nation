@@ -11,7 +11,7 @@
 
 ## 规格与实现证据
 
-4 个 capability、10 项 SHALL 需求、21 个 WHEN/THEN 场景。官方 OpenSpec 2.0.0 严格校验已通过。代码和自动测试已经实现；任务勾选与未完成的浏览器验收分别记录。
+4 个 capability、10 项 SHALL 需求、23 个 WHEN/THEN 场景。代码和自动测试已经实现；任务勾选与未完成的浏览器验收分别记录。严格校验与测试结果按各次 commit 记录在工作区 verification 中。
 
 | 能力 | 代码 | 自动验证 |
 | --- | --- | --- |
@@ -21,6 +21,8 @@
 | session-reentry | progression 元数据/基线与 local-client 载入 | progression.test 的旧档/时钟/未知版本；lifecycle 的摘要持久化 |
 
 完整阶段矩阵、操作说明和验证限制见 `docs/游戏进程闭环验证.md`。提交后按用户要求重新运行全量检查，实际结果记入工作区 `verification/gameplay-flow-post-commit.md`。GitHub Actions 已配置相同的测试和 OpenSpec 校验。
+
+后续复核补齐离线结算时序与恢复失败保护，对应新增场景和真实引擎测试。该次提交后的全量结果单独记入工作区 `verification/gameplay-flow-followup.md`，不以旧提交的测试结果代替。
 
 ## 待完成验收
 
