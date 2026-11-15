@@ -221,3 +221,14 @@ body.map-mode #local-dock .local-summary { display:none; }
 @media(max-width:1050px) { #hex-app .workspace { grid-template-columns:minmax(0,1fr) 290px; } #hex-app .live-toolbar { max-width:360px; } }
 @media(max-width:800px) { #hex-app .workspace { grid-template-columns:1fr; } #hex-app .inspector { display:flex; } #hex-app .masthead { flex-wrap:wrap; } #hex-app .live-toolbar { max-width:none; } #hex-app #map-save-status { text-align:left; } #hex-app .goal-card { align-items:stretch; flex-direction:column; gap:10px; } #hex-app .goal-actions { min-width:0; grid-template-columns:1fr auto; } #hex-app .goal-actions label { grid-column:1/-1; } #hex-app .action-list { max-height:430px; } #hex-app .map-tools { flex-wrap:wrap; } #hex-app .ledger .ledger-note { display:none; } #hex-app .resources { display:flex; overflow-x:auto; padding-bottom:5px; } #hex-app .resource-card { flex:0 0 128px; padding:7px 10px; } }
 @media(max-width:480px) { #hex-app .resources { grid-template-columns:repeat(2,minmax(0,1fr)); } #hex-app .camera-sliders { gap:12px; } #hex-app .camera-heading { flex-wrap:wrap; } #hex-app .ledger strong { font-size:12px; } }
+#hex-app [hidden]{display:none!important}
+#hex-app .journey-card{border:1px solid #72794e;background:#2b3e2e;padding:16px 20px;margin:12px 0;line-height:1.8}
+#hex-app .journey-card h2{font-size:17px;margin:0 0 8px}
+#hex-app .journey-card p{white-space:pre-line;margin:6px 0 12px}
+#hex-app .journey-card.warning{border-color:#c9a75c;background:#463b25}
+#hex-app .journey-controls{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+#hex-app .advanced-systems{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:14px 0}
+#hex-app .advanced-system{border:1px solid #657651;padding:12px}
+#hex-app .advanced-system h3{margin:0;font-size:14px}
+#hex-app .advanced-system button{margin-right:6px}
+#hex-app #goal-feedback{font-size:12px;color:#e6d194;margin-top:8px}

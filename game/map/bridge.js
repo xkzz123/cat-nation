@@ -59,6 +59,7 @@
     game.bld.undo=function(data){if(data.action==='build'&&data.catMapTile)return self.undoBuild(data);return undo.call(this,data);};
   }
   Bridge.prototype.sync=function(){this.map.reconcile(this.game.bld.buildingsData,this.game.village.getJob('woodcutter').value);};
+  Bridge.prototype.openSystem=function(id){return this.engine.CatProgression.openSystem(this.game,id);};
   Bridge.prototype.guard=function(){if(this.game.currentSaveIsBroken||this.game.isReadOnly())throw new Error('当前存档不可修改。');if(this.engine.localGame&&this.engine.localGame.canWrite&&!this.engine.localGame.canWrite())throw new Error('存档服务尚未就绪或已发生冲突，请先刷新。');};
   Bridge.prototype.building=function(id){var meta=this.game.bld.get(id),C=meta.stages?this.engine.classes.ui.btn.StagingBldBtnController:this.engine.classes.ui.btn.BuildingBtnModernController,controller=new C(this.game);return {controller:controller,model:controller.fetchModel({key:id,building:id})};};
   Bridge.prototype.research=function(kind,id){var E=this.engine,C=kind==='tech'?E.com.nuclearunicorn.game.ui.TechButtonController:E.com.nuclearunicorn.game.ui.UpgradeButtonController,controller=new C(this.game);return {controller:controller,model:controller.fetchModel({id:id})};};

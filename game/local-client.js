@@ -3,6 +3,8 @@
   var key = 'com.nuclearunicorn.kittengame.savedata';
   var revision = null, chain = Promise.resolve(), suspended = false, conflict = false, gameRef;
   var api = window.localGame = { ready: false };
+  var progression = window.CatProgression, flow, entry, resetState = 'idle', resetCandidate, resetId, resetBefore, resetPrepared = false, resetBusy = false;
+  var loadedSave, loadedSource = '新游戏', entryPending = false, settlingEntry = false;
   var initialError = '';
   var intervalKey = 'cat-nation.local.autosave-seconds', saveInterval = 15, saveTimer;
   var saveIntervals = [{ seconds: 5, label: '5 秒' }, { seconds: 15, label: '15 秒' }, { seconds: 30, label: '30 秒' }, { seconds: 60, label: '1 分钟' }, { seconds: 120, label: '2 分钟' }, { seconds: 300, label: '5 分钟' }, { seconds: 600, label: '10 分钟' }];
@@ -68,6 +70,11 @@
     request.send();
     if (request.status !== 200) throw new Error('无法读取磁盘存档。为避免覆盖旧进度，游戏已停止加载。请查看 data/backups 和本地使用说明。');
     var state = JSON.parse(request.responseText);
+    loadedSave = state.save;
+    loadedSource = state.save ? '磁盘存档' : localStorage.getItem(key) && state.revision === null ? '浏览器存档' : '新游戏';
+    if (!loadedSave && state.revision === null && progression) {
+      try { loadedSave = JSON.parse(localStorage.getItem(key)); } catch (_) {}
+    }
     revision = state.revision;
     if (state.save) localStorage.setItem(key, JSON.stringify(state.save));
     else if (state.revision !== null) localStorage.removeItem(key);
@@ -97,12 +104,21 @@
     return data;
   }
 
-  function write(save, kind) {
+  function write(save, kind, operationId) {
     if (conflict) return Promise.reject(new Error('存档已被其他窗口修改，请先刷新。'));
     var pending = chain.then(async function () {
       if (conflict) throw new Error('存档已被其他窗口修改，请先刷新。');
       status('正在写入磁盘…');
-      var result = await call('/api/save', { save: save, revision: revision, kind: kind });
+      var result;
+      try { result = await call('/api/save', { save: save, revision: revision, kind: kind, operationId: operationId }); }
+      catch (error) {
+        if (!operationId) throw error;
+        var disk = await call('/api/state');
+        if (disk.operationId !== operationId || JSON.stringify(disk.save) !== JSON.stringify(save)) throw error;
+        conflict = false;
+        result = disk;
+      }
+      if (operationId && result.operationId !== operationId) throw new Error('服务端不支持安全转生提交，请更新并重新启动服务。');
       revision = result.revision;
       status('已保存到磁盘 · ' + new Date(result.savedAt).toLocaleTimeString('zh-CN'));
       return result;
@@ -113,12 +129,29 @@
 
   function serialize() {
     if (!gameRef || gameRef.currentSaveIsBroken || gameRef.previewMode) throw new Error('游戏尚未就绪或存档加载失败，已阻止保存。');
+    if (entryPending) throw new Error('正在结算原版离线进度，请稍候。');
+    if (resetCandidate) return resetCandidate;
     var wasSuspended = suspended;
     suspended = true;
     try { return gameRef.save(); } finally { suspended = wasSuspended; }
   }
-  api.canWrite = function () { return api.ready && !conflict && !!gameRef && !gameRef.currentSaveIsBroken; };
-  api.save = function (kind) { return write(serialize(), kind || 'manual'); };
+  api.canWrite = function () { return api.ready && (!entryPending || settlingEntry) && !suspended && !conflict && !!gameRef && !gameRef.currentSaveIsBroken && !gameRef.previewMode && !(gameRef.isReadOnly && gameRef.isReadOnly()); };
+  api.save = function (kind) { if (!api.canWrite()) return Promise.reject(new Error('当前进度不可写入，请先处理存档状态。')); return write(serialize(), kind || 'manual'); };
+  api.getProgression = function () { return flow; };
+  api.getEntry = function () { return entry; };
+  api.getResetState = function () { return resetState; };
+  api.hideGuidance = function (hidden) { if (!api.canWrite()) return; flow.hidden = !!hidden; };
+  api.dismissSummary = async function () { if (!api.canWrite()) throw new Error('当前进度不可写入。'); if (flow.pendingRunSummary) flow.pendingRunSummary.read = true; await api.save('auto'); showClassicSummary(); };
+  function showClassicSummary() {
+    var summary = flow && flow.pendingRunSummary, target = document.getElementById('local-run-summary');
+    if (!target) return;
+    target.hidden = entryPending || !summary || summary.read;
+    if (target.hidden) return;
+    document.getElementById('local-run-detail').textContent = '上一轮第 ' + summary.year + ' 年，' + summary.population + ' 只猫咪，' + summary.buildings + ' 座建筑，' + summary.technologies + ' 项科技。实际结算：威望 ' + (summary.paragon >= 0 ? '+' : '') + summary.paragon + '；累计业力猫咪 ' + summary.karmaKittens + '。新周目已载入，可继续发展。';
+    if (window.location && window.location.search && new URLSearchParams(window.location.search).get('view') === 'classic') {
+      var dialog = document.getElementById('local-dialog'); if (!dialog.open) dialog.showModal();
+    }
+  }
 
   function download(save, name) {
     var url = URL.createObjectURL(new Blob([JSON.stringify(save, null, 2)], { type: 'application/json' }));
@@ -139,11 +172,13 @@
   }
 
   async function replace(save, kind) {
-    var wasPaused = gameRef.isPaused;
+    if (resetBusy) throw new Error('转生正在提交，请等待结果。');
+    if (entryPending) throw new Error('正在结算原版离线进度，请稍候。');
+    var wasPaused = gameRef.isPaused, wasSuspended = suspended;
     suspended = true;
     gameRef.isPaused = true;
     try { await chain; await write(save, kind); location.reload(); }
-    catch (error) { status(error.message, true); suspended = false; gameRef.isPaused = conflict || wasPaused; throw error; }
+    catch (error) { status(error.message, true); suspended = wasSuspended; gameRef.isPaused = conflict || wasPaused; throw error; }
   }
 
   api.prepare = function () {
@@ -157,6 +192,31 @@
 
   api.attach = function (game) {
     gameRef = game;
+    var originalReadOnly = game.isReadOnly;
+    game.isReadOnly = function () { return suspended || conflict || !!(originalReadOnly && originalReadOnly.call(this)); };
+    if (progression) {
+      if (!loadedSave && loadedSource === '浏览器存档' && game._parseLSSaveData) loadedSave = game._parseLSSaveData();
+      flow = progression.metadata(loadedSave && loadedSave.progression);
+      entryPending = !!(loadedSave && loadedSave.time && game.time && game.time.calculateRedshift);
+      if (entryPending) {
+        var calculateRedshift = game.time.calculateRedshift;
+        game.time.calculateRedshift = function () {
+          var wasSettling = settlingEntry, result;
+          settlingEntry = entryPending;
+          try { result = calculateRedshift.apply(this, arguments); }
+          finally { settlingEntry = wasSettling; }
+          if (entryPending) {
+            entryPending = false;
+            entry = progression.reentry(game, flow.baseline, loadedSource, Date.now());
+            showClassicSummary();
+            if (api.canWrite()) game.save();
+          }
+          return result;
+        };
+      } else entry = progression.reentry(game, flow.baseline, loadedSource, Date.now());
+      var prepare = game._prepareSaveData;
+      if (prepare) game._prepareSaveData = function (data) { data.progression = Object.assign({}, flow, { baseline: progression.baseline(game, Date.now()) }); return prepare.call(this, data); };
+    }
     game.opts.disableTelemetry = true;
     var originalTick = game.tick, originalTickRate = game.getTicksPerSecondUI;
     // Keep the native tick size and offline calculations; accelerate complete simulation steps.
@@ -164,7 +224,10 @@
       if (suspended || conflict || this.previewMode || this.currentSaveIsBroken) return;
       var steps = gameSpeed;
       for (var step = 0; step < steps; step++) {
-        originalTick.apply(this, arguments);
+        var wasSettling = settlingEntry;
+        settlingEntry = entryPending || wasSettling;
+        try { originalTick.apply(this, arguments); }
+        finally { settlingEntry = wasSettling; }
         if (this.isPaused || this.previewMode || this.currentSaveIsBroken || suspended || conflict) break;
       }
     };
@@ -173,24 +236,92 @@
     game.autosaveFrequency = game.ticksBeforeSave = Infinity;
     var originalSave = game.save;
     game.save = function () {
+      if (entryPending) return loadedSave;
+      if (resetCandidate) return resetCandidate;
       var data = originalSave.apply(this, arguments);
       if (!suspended && !this.currentSaveIsBroken && !this.previewMode) write(data, 'auto').catch(function () {});
       return data;
     };
     game._wipe = function () { replace(null, 'new').catch(function (error) { alert(error.message); }); };
-    game.resetAutomatic = function () {
-      game.timer.scheduleEvent(async function () {
-        suspended = true;
-        game.isPaused = true;
-        try {
-          await chain;
-          await write(serialize(), 'manual');
-          var resetSave = game._resetInternal();
-          await write(resetSave, 'reset');
-          location.reload();
-        } catch (error) { status('转生保存失败：' + error.message + '。请从最近的手动备份恢复。', true); alert(error.message); }
-      });
+    function resetStatus(state) { resetState = state; var retry = document.getElementById('local-reset-retry'); if (retry) retry.hidden = state !== 'failed-after-reset'; }
+    async function backupReset() {
+      var health = await call('/api/health');
+      if (health.resetProtocol !== 1) throw new Error('请先更新并重启本地服务，当前服务不支持安全转生。');
+      await chain;
+      await write(serialize(), 'manual');
+      resetPrepared = true;
+    }
+    api.retryReset = async function () {
+      if (resetBusy || !resetCandidate || conflict) return;
+      resetBusy = true; resetStatus('committing');
+      try {
+        var disk = await call('/api/state');
+        if (disk.operationId === resetId && JSON.stringify(disk.save) === JSON.stringify(resetCandidate)) {
+          revision = disk.revision;
+        } else {
+          if (disk.revision !== revision) { conflict = true; resetStatus('conflict'); throw new Error('磁盘进度已变化，请重新载入或从备份恢复。'); }
+          await write(resetCandidate, 'reset', resetId);
+        }
+        resetStatus('completed'); location.reload();
+      } catch (error) { resetStatus(conflict ? 'conflict' : 'failed-after-reset'); status('转生未完成：' + error.message + '。可重试同一结果或在存档管理中恢复备份。', true); }
+      finally { resetBusy = false; }
     };
+    game.resetAutomatic = async function () {
+      if (entryPending || resetBusy || resetCandidate || conflict || game.currentSaveIsBroken || game.previewMode) return;
+      resetBusy = true;
+      var wasPaused = game.isPaused;
+      suspended = true; game.isPaused = true;
+      try {
+        resetStatus('backing-up');
+        if (!resetPrepared) await backupReset();
+        resetBefore = resetBefore || (progression && progression.preview(game));
+        resetStatus('resetting');
+        resetCandidate = game._resetInternal();
+        resetId = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : 'reset-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        if (progression) {
+          var paragon = resetCandidate.resources.find(function(r) { return r.name === 'paragon'; });
+          resetBefore.paragon = (paragon ? paragon.value : 0) - resetBefore.paragonBefore;
+          resetBefore.karmaKittens = resetCandidate.game.karmaKittens;
+          resetCandidate.progression = progression.metadata({version:1,hidden:flow.hidden,pendingRunSummary:Object.assign({id:resetId,read:false},resetBefore)});
+          localStorage.setItem(key, JSON.stringify(resetCandidate));
+        }
+      } catch (error) {
+        if (resetState === 'resetting') { resetStatus('conflict'); status('重置过程失败，请从转生前手动备份恢复：' + error.message, true); }
+        else { resetStatus('failed-before-reset'); suspended = false; game.isPaused = wasPaused; status('转生前备份失败，未执行重置：' + error.message, true); }
+        resetBusy = false; return;
+      }
+      resetBusy = false;
+      await api.retryReset();
+    };
+    function installResetPreview(owner, method) {
+      var originalReset = owner[method];
+      if (!originalReset) return;
+      owner[method] = function () {
+      if (!api.canWrite() || !['idle','failed-before-reset'].includes(resetState)) return;
+      resetBefore = progression && progression.preview(game);
+      resetStatus('preview');
+      var originalConfirm = game.ui.confirm, confirmed = false;
+      game.ui.confirm = function (title, message, yes, no) {
+        confirmed = true;
+        var summary = resetBefore;
+        if (summary) message = '本轮：第 ' + summary.year + ' 年，' + summary.population + ' 只猫咪，' + summary.buildings + ' 座建筑，' + summary.technologies + ' 项科技。\n预计获得威望 ' + summary.paragon + '，累计业力猫咪 ' + summary.karmaKittens + '。\n' + summary.details + '\n\n' + message;
+        return originalConfirm.call(this, title, message, async function () {
+          if (resetBusy || resetState !== 'preview') return;
+          resetBefore = progression && progression.preview(game);
+          var wasPaused = game.isPaused;
+          resetBusy = true; suspended = true; game.isPaused = true; resetStatus('backing-up');
+          try { await backupReset(); }
+          catch (error) { resetBusy = false; suspended = false; game.isPaused = wasPaused; resetStatus('failed-before-reset'); status('转生前备份失败，未执行重置：' + error.message, true); }
+          if (!resetPrepared) return;
+          resetBusy = false;
+          try { yes(); } catch (error) { suspended = true; game.isPaused = true; resetStatus('conflict'); status('转生钩子失败，请从转生前手动备份恢复：' + error.message, true); }
+        }, function () { resetStatus('idle'); if (no) no(); });
+      };
+      try { return originalReset.apply(this, arguments); } finally { game.ui.confirm = originalConfirm; if (!confirmed) resetStatus('idle'); }
+      };
+    }
+    installResetPreview(game, 'reset');
+    if (game.challenges) installResetPreview(game.challenges, 'applyPending');
     game._loadSaveJson = function (text, callback) {
       try {
         var parsed = JSON.parse(text.trim()[0] === '{' ? text : game.decompressLZData(text));
@@ -198,6 +329,7 @@
       } catch (error) { callback(error); }
     };
     status('本地存档已就绪 · 每 ' + intervalLabel() + '自动保存');
+    showClassicSummary();
     scheduleAutosave();
     document.addEventListener('visibilitychange', function () {
       if (document.hidden && !suspended && !conflict && !game.currentSaveIsBroken) game.save();
@@ -210,7 +342,7 @@
         fetch('/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ save: save, revision: revision, kind: 'auto' }), keepalive: true }).catch(function () {});
       } catch (_) {}
     });
-    if (!game.currentSaveIsBroken) game.save();
+    if (!game.currentSaveIsBroken && !entryPending) game.save();
   };
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -218,10 +350,11 @@
     dock.id = 'local-dock';
     dock.innerHTML = '<div class="local-summary"><strong>猫国 · 本地版</strong><span id="local-status" role="status" aria-live="polite">正在加载…</span><button id="local-manage">存档管理</button></div>' +
       '<dialog id="local-dialog"><div class="local-heading"><h2>本地存档</h2><button id="local-close" aria-label="关闭存档管理">✕</button></div>' +
+      '<section id="local-run-summary" hidden><h3>本轮完成 · 开始新周目</h3><p id="local-run-detail"></p><button id="local-run-dismiss">了解，继续发展</button></section>' +
       '<p>进度写入 <code>data/latest.json</code>，每分钟保留一个自动快照（最近 240 份）。手动备份和恢复前的快照长期保留。</p>' +
       '<div class="local-autosave"><label for="local-save-interval">自动存档间隔</label><select id="local-save-interval" data-save-interval></select><span>立即生效，并记住本浏览器的选择。</span></div>' +
       '<div class="local-autosave"><label for="local-game-speed">游戏速度</label><select id="local-game-speed" data-game-speed></select><span>暂停期间不推进；自动存档仍按现实时间计时。</span></div>' +
-      '<div class="local-actions"><button id="local-save" class="primary">立即保存并备份</button><button id="local-export">导出存档文件</button><button id="local-import">导入存档文件</button></div>' +
+      '<div class="local-actions"><button id="local-save" class="primary">立即保存并备份</button><button id="local-export">导出存档文件</button><button id="local-import">导入存档文件</button><button id="local-reset-retry" hidden>重试转生结果保存</button></div>' +
       '<input type="file" id="local-file" accept=".json,.txt,.save" hidden>' +
       '<label for="local-text">也可以粘贴原版导出的存档文字</label><textarea id="local-text" rows="3" placeholder="粘贴 JSON 或原版压缩存档"></textarea><button id="local-import-text">导入这段存档</button>' +
       '<div class="local-heading"><h3>历史备份</h3><button id="local-refresh">刷新列表</button></div><div id="local-backups"></div>' +
@@ -271,7 +404,9 @@
     }
     bind('local-manage', async function () { dialog.showModal(); await list(); });
     bind('local-close', function () { dialog.close(); });
-    bind('local-save', async function () { await write(serialize(), 'manual'); await list(); });
+    bind('local-save', async function () { await api.save('manual'); await list(); });
+    bind('local-reset-retry', api.retryReset);
+    bind('local-run-dismiss', async function () { await api.dismissSummary(); document.getElementById('local-run-summary').hidden = true; });
     bind('local-export', function () { download(serialize(), 'kittens-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json'); });
     bind('local-import', function () { document.getElementById('local-file').click(); });
     bind('local-import-text', function () { return importText(document.getElementById('local-text').value); });
@@ -282,5 +417,6 @@
       event.target.value = '';
     });
     if (initialError) { status(initialError, true); alert(initialError); }
+    showClassicSummary();
   });
 }());
