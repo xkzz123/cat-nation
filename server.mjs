@@ -77,18 +77,26 @@ export function createGameServer({ dataDir = path.join(root, 'data'), gameDir = 
     const automatic = fs.readdirSync(snapshotDir).filter(n => n.includes('_auto_')).sort().reverse();
     for (const name of automatic.slice(240)) fs.unlinkSync(path.join(snapshotDir, name));
   }
-  function commit(save, expectedRevision, kind = 'auto') {
+  function commit(save, expectedRevision, kind = 'auto', operationId) {
     if (kind !== 'new' || save !== null) validate(save);
     const previous = current();
+    if (operationId !== undefined && (kind !== 'reset' || typeof operationId !== 'string' || !/^[a-zA-Z0-9-]{8,100}$/.test(operationId))) {
+      throw Object.assign(new Error('无效的转生提交标识。'), { status: 400 });
+    }
+    if (operationId && previous.operationId === operationId) {
+      if (JSON.stringify(previous.save) !== JSON.stringify(save)) throw Object.assign(new Error('转生标识已用于不同结果。'), { status: 409 });
+      return { revision: previous.revision, savedAt: previous.savedAt, operationId };
+    }
     if (expectedRevision !== previous.revision) throw Object.assign(new Error('另一个窗口已更新存档。请刷新此页面后继续，磁盘存档没有被覆盖。'), { status: 409 });
     if (kind !== 'auto') backup(previous, 'before-' + kind);
     const record = { revision: randomUUID(), savedAt: new Date().toISOString(), save };
+    if (operationId) record.operationId = operationId;
     if (kind !== 'auto' || Date.now() - lastAutomatic >= 60000) {
       backup(record, kind);
       lastAutomatic = Date.now();
     }
     atomicWrite(latest, record);
-    return { revision: record.revision, savedAt: record.savedAt };
+    return { revision: record.revision, savedAt: record.savedAt, ...(operationId ? { operationId } : {}) };
   }
   const server = http.createServer(async (req, res) => {
     const json = (status, value) => { res.writeHead(status, { 'Content-Type': mime['.json'], 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
@@ -101,7 +109,7 @@ export function createGameServer({ dataDir = path.join(root, 'data'), gameDir = 
       res.setHeader('Content-Security-Policy', "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'self'; form-action 'self'");
       res.setHeader('X-Content-Type-Options', 'nosniff');
       const url = new URL(req.url, origin);
-      if (req.method === 'GET' && url.pathname === '/api/health') return json(200, { app: 'cat-nation-local', version: 1 });
+      if (req.method === 'GET' && url.pathname === '/api/health') return json(200, { app: 'cat-nation-local', version: 1, resetProtocol: 1 });
       if (req.method === 'GET' && url.pathname === '/api/state') return json(200, current());
       if (req.method === 'GET' && url.pathname === '/api/backups') {
         const records = fs.readdirSync(snapshotDir).filter(n => /^[\w.-]+\.json$/.test(n)).sort().reverse();
@@ -124,7 +132,7 @@ export function createGameServer({ dataDir = path.join(root, 'data'), gameDir = 
         }
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
         if (!['auto', 'manual', 'import', 'restore', 'new', 'reset'].includes(body.kind)) return json(400, { error: '无效的保存类型。' });
-        return json(200, commit(body.save, body.revision, body.kind));
+        return json(200, commit(body.save, body.revision, body.kind, body.operationId));
       }
       if (url.pathname.startsWith('/api/')) return json(404, { error: '接口不存在。' });
       if (!['GET', 'HEAD'].includes(req.method)) return json(405, { error: '方法不支持。' });

@@ -1,0 +1,7 @@
+schema: spec-driven
+
+context: |
+  猫国建设者本地版，基于 Kittens Game 原版引擎和六角地图界面。
+  游戏经济、解锁、转生与挑战规则以原版引擎为准。
+  使用中文编写提案和设计；需求使用 SHALL，并提供 WHEN/THEN 场景。
+  当前变更基于 feature-v1；实施与验证状态记录在 change 的 tasks 和 review 中。

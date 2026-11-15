@@ -81,3 +81,21 @@ test('disk save survives restart; restore, import and new game preserve backups 
     assert.equal(fs.readFileSync(path.join(dataDir, 'latest.json'), 'utf8'), '{corrupt');
   } finally { console.error = originalError; }
 });
+
+test('reset operation IDs replay the same committed result across restart but never overwrite a newer revision', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-reset-id-'));
+  let server;
+  t.after(async () => { if (server?.listening) await new Promise(r => server.close(r)); fs.rmSync(dataDir, {recursive:true,force:true}); });
+  async function start() { server=createGameServer({dataDir});await new Promise(r=>server.listen(0,'127.0.0.1',r));return `http://127.0.0.1:${server.address().port}`; }
+  let url=await start();
+  const post=async body=>{const response=await fetch(url+'/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:response.status,data:await response.json()};};
+  const body={save:realSave(),revision:null,kind:'reset',operationId:'test-reset-1234'};
+  const result=await post(body);assert.equal(result.status,200);assert.equal(result.data.operationId,body.operationId);
+  await new Promise(r=>server.close(r));url=await start();
+  assert.deepEqual(await post(body),result);
+  const altered=structuredClone(body);altered.save.calendar.year++;
+  assert.equal((await post(altered)).status,409);
+  const newer=await post({save:body.save,kind:'auto',revision:result.data.revision});assert.equal(newer.status,200);
+  assert.equal((await post(body)).status,409);
+  assert.equal((await (await fetch(url+'/api/state')).json()).revision,newer.data.revision);
+});
